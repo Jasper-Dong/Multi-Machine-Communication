@@ -1,0 +1,137 @@
+#include <reg51.h>
+#include <intrins.h>
+#define uchar unsigned char
+#define uint  unsigned int
+#define SLAVE  0x04
+#define BN  1 
+sbit START=P2^0;
+sbit EOC=P2^1;
+sbit OE=P2^2;
+sbit ready=P3^2;
+sbit judge=P3^7;
+uchar  trbuf[1];
+uchar  rebuf[1];
+uchar  ad_sin[20];
+uchar max_sin[20];
+uchar ad_data=0x00;
+long sum=0x00;
+bit tready;
+bit rready;
+void str ( void );
+void sre ( void );
+void delay(uint time){
+	uchar j;
+    while(time--){
+    	for(j=0;j<125;j++);
+    }
+}
+
+void main(){
+	TMOD=0x20;         		/*T/C1定义为方式2*/
+	TL1=0xfd;        		/*置初值*/
+	TH1=0xfd;
+	P2=0xff;
+	PCON=0x00;
+	SCON=0xf0;          		/*串行口为方式3*/
+	ES=1;EA=1;         		/*开串行口中断*/
+	TR1=1;
+	SM2=1;
+	OE=0;
+	P0=0xff;
+	tready=1;
+	rready=1;
+	while (1){
+		ready=1;
+		delay(1000);
+		START=0;
+		_nop_();
+		START=1;	
+		_nop_();
+		START=0;
+		while(EOC==0){;}
+		OE=1;
+		ad_data=P0;
+		OE=0;
+		trbuf[0]=ad_data;
+		ready=0; 
+		P1=trbuf[0];
+		delay(4000);
+	}	
+}
+
+void send_rece () interrupt 4 {
+	uchar a;
+	judge=0;
+	RI=0;
+    ES=0;              			/*关串行口中断*/
+    if(SBUF!=SLAVE){ES=1;RB8=1;goto stop;}  	/*非本机地址,继续监听*/
+    SM2=0;     				/* 取消监听状态 */
+    while ( RI!=1 );RI=0;
+    if ( RB8==1 ){goto stop;} /* 是复位信号，恢复监听 */
+    a=SBUF;     				  /* 接收命令 */
+    if (a==0x01 ){    				  // 从主机接收的数据 
+	    if (rready==1)            /* 接收准备好发状态 */
+			SBUF=0x01; 
+	    else 
+			SBUF=0x00;
+	    while ( TI!=1 ); TI=0;
+	    while ( RI!=1 ); RI=0;
+	    if ( RB8==1 ){goto stop ;}
+	    sre( ) ;         				/* 接收数据 */
+    }
+    else if( a==0x02 ){      			// 从机向主机发送数据
+	    if ( tready==1 ) 
+			SBUF=0x02;	/* 发送准备好发状态 */
+	    else
+			SBUF=0x00;
+	    while ( TI!=1 );TI=0 ;
+	    while ( RI!=1 );RI=0 ;	
+	    if ( RB8==1 ){goto stop ; }
+	    str ( ) ;            		/* 发送数据 */
+    }
+    else{
+		SBUF= 0x00 ;      		/* 命令非法 ，发状态 */
+	    while ( TI!=1 ); TI=0 ;
+	    SM2=1 ; ES=1 ;     		/* 恢复监听 */
+    }
+   stop:TI=0;RI=0;ES=1;SM2=1;judge=1;
+ }
+
+ void str ( void ){    			/* 发数据块 */
+	uchar p,i;
+    while (1){ 
+		p=0;       			/* 清校验和 */
+	    for ( i=0; i<BN ; i++ ){
+			SBUF=trbuf[i] ;    		/* 发送一数据 */
+		    p+=trbuf[i] ;
+		    while ( TI !=1 );TI=0 ; 
+	    }
+	    SBUF= p ;       			/* 发送校验和 */
+	    while ( TI==0 );TI=0;
+	    while ( RI==0 );RI=0;
+		if (SBUF==0x00){		/* 主机接收不正确，重新发送 */
+    		break;
+		}
+	} 
+} 
+void sre (){    		/* 接收数据块 */
+	uchar  p,i ;
+    rready= 0 ;
+    while (1){
+		p=0;        		/* 清校验和 */
+	    for ( i=0 ; i< BN ; i++) {
+		       while ( RI !=1 );RI=0 ;
+	           rebuf [ i ]=SBUF ;    	/* 接收数据 */
+	           p+=rebuf [ i ] ;
+	    }
+	    while (RI!=1);RI=0 ;
+	    if ( SBUF==p ){
+		   SBUF=0x00;
+		   break; 
+		} 	/* 校验和相同发"00"*/
+	    else {
+	    	SBUF=0xff  ;       		/* 校验和不同发"0FF"，重新接收 */
+	    	while ( TI== 0 ) ;TI=0;
+	    }
+    }
+} 

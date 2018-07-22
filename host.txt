@@ -1,0 +1,215 @@
+#include <reg51.h>
+#include <string.h>
+#define uchar unsigned char
+#define uint unsigned int
+#define BN 1
+#define LCDPORT P0
+sbit LCDE=P2^0;
+sbit LCDRW=P2^1;
+sbit LCDRS=P2^2;
+sbit key1=P2^7;
+sbit key2=P2^6;
+sbit ready=P3^4;
+uchar tab[8];
+uchar data tab_inti[8]={"waiting."};
+uchar  rbuf [1];
+uchar  tbuf [1];
+uchar data_p;
+uint data_ad;
+uint j, count;
+void init();
+void WriteCMD(uchar Command);
+void WriteData(uchar dat);
+void reset ();
+void master (uchar addr, uchar command);
+void exchange_one();
+void exchange_two();
+void delay(uint time){
+	uint i;
+	while(time--){
+	for (i=0;i<121;i++);
+	}			 
+}
+void delay_ms(){
+	uint i;
+	for(i=0;i<121;i++);
+}
+
+void main (){
+	count=100;
+	TMOD=0x20;                     		/* T/C1定义为方式2 */
+	TL1=0xfd;
+	TH1=0xfd;                	/* 置初值 */
+	PCON=0x00;
+	SCON=0xf0;                        	/* 串行口为方式3 */
+	P1=0xff;
+	TR1=1;
+	SM2=0;
+	init();
+	while(1){
+		ready=0;
+		strcpy(tab,tab_inti);
+		while(count--){
+			WriteCMD(0x80);
+			for (j=0;j<sizeof(tab);j++)
+				WriteData(tab[j]);
+		}
+		count=100;
+		if (key1==0){
+			exchange_one();			 
+		}
+		if (key2==0){
+			exchange_two();
+		}
+	}
+}
+void exchange_one(){
+	while(count--){
+ 		ready=1;
+		master(0x03,0x02);
+		strcpy(tab,"cj1:0x00");
+		P1=rbuf[0];
+		tab[7]=rbuf[0]%16+'0';
+		switch (rbuf[0]%16){
+			case 10 : tab[7]='a';break;
+			case 11 : tab[7]='b';break;
+			case 12 : tab[7]='c';break;
+			case 13 : tab[7]='d';break;
+			case 14 : tab[7]='e';break;
+			case 15 : tab[7]='f';break;
+		} 
+		WriteCMD(0x80);
+		for (j=0;j<sizeof(tab);j++)
+			WriteData(tab[j]);
+		if (key1==1){
+			SCON=0xf0;                        	
+			P1=0xff;
+			SM2=0;
+			break;
+		}
+		SCON=0xf0;                        	
+		P1=0xff;
+		SM2=0;	
+	}
+	count=100;
+}
+void exchange_two(){
+	while (count--){
+		ready=1;
+		master(0x04,0x02);
+		strcpy(tab,"cj2:0.00");
+		P1=rbuf[0];
+		data_ad=rbuf[0]*1.0/255*500;
+		tab[4]=data_ad/100%10+'0';
+		tab[6]=data_ad/10%10+'0';
+		tab[7]=data_ad%10+'0';
+		WriteCMD(0x80);
+		for (j=0;j<sizeof(tab);j++)
+				WriteData(tab[j]);
+			if (key2==1){
+			SCON=0xf0;	
+			P1=0xff;
+			SM2=0;
+			break;
+			}
+		SCON=0xf0;	
+		P1=0xff;
+		SM2=0;
+	}
+	count=100;
+}
+void master (uchar addr, uchar command){
+	uchar aa,i,p;
+	begin:;
+ 	TB8=1;
+	SBUF=addr;            		/* 发呼叫地址 */
+    while (TI!=1);TI=0;
+    TB8=0;                  			/* 清地址标志 */
+    SBUF=command;    			/* 发命令 */
+    while (TI!=1);TI=0;
+    while (RI!=1);RI=0;
+    aa=SBUF;           			/* 接收状态 */
+    if((aa&0x0f)==0x00) {reset( ); goto begin;} /* 若命令未被接收,发复位信号 */
+    else{
+		TB8=0;
+		SBUF=command;
+    	if ( command==0x01){ 	             	/* 是发送命令 */
+	        	do{	
+		            p=0;            		/* 清校验和 */
+		            for(i=0;i<BN;i++){  
+						SBUF=tbuf[i];    		/* 发送一数据 */
+			            p+=tbuf[i];
+			 	        while(TI!=1);TI=0;
+		            }
+		            SBUF=p;        		/* 发送校验和 */
+		            while (TI==0);TI=0;
+		            while (RI==0);RI=0;
+	            }
+				while (SBUF!=0x00);     	/* 接收不正确，重新发送 */
+	            TB8=1;              		/* 置地址标志 */
+         }
+		else if ( command==0x02){
+			TB8=0;
+			SBUF=command;
+			    while(1){
+					p=0;                      		/* 清校验和 */
+					for(i=0;i<BN;i++){  
+						while (RI!=1); RI=0;
+					    rbuf[i]=SBUF;          		/* 接收一数据 */
+					    p=p+rbuf[i];
+				    }
+				    while(RI==0);RI=0;
+					data_p=SBUF;
+				    if(data_p==p){ 
+						SBUF=0X00;         		/* 校验和相同发"00" */
+				    	while(TI==0);TI=0;
+				    	break;
+				    }
+				    else{ 
+						SBUF=0xff;                	/* 校验和不同发"0FF"，重新接收 */
+				    	while(TI==0);TI=0;
+				    }
+			    } 
+			    TB8=1;                          	/* 置地址标志 */
+	    }
+   }
+}
+void WriteCMD(uchar Command){
+	delay_ms(); //先延时。
+	LCDE=1; //然后把改为写入命令状态。
+	LCDRS=0;
+	LCDRW=0;
+	LCDPORT=Command; //再输出命令。
+	LCDE=0; //最后执行命令。
+}
+void init(){
+	LCDRW=0;
+	LCDE=0;
+	WriteCMD(0x38);	 //开显示
+	WriteCMD(0x0c);	  //开显示不显示光标
+	WriteCMD(0x06);	  //写一个指针加1
+	WriteCMD(0x01);	   //清屏
+	WriteCMD(0x80);	   //设置数据指针起点
+}
+void WriteData(uchar dat){
+	delay_ms(); //先延时。
+	LCDE=1; //然后改为写入数据状态。
+	LCDRS=1;
+	LCDRW=0;
+	LCDPORT=dat; //再输出数据。
+	LCDE=0; //最后显示数据。
+ }
+
+void reset (){
+	uint j;
+	TB8=1; 
+	SBUF=0xff;
+	while(TI!=1);
+	TI=0;
+	strcpy(tab,"comd:err");
+	WriteCMD(0x80);
+	for (j=0;j<sizeof(tab);j++)
+		WriteData(tab[j]);
+	delay(1000);
+
+}
